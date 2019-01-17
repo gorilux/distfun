@@ -346,18 +346,17 @@ namespace distfun {
 
 	
 	template <class CopyFun>
-	void commitProgram(DistProgramStatic * destination, const DistProgram & program, CopyFun copyFunction){
-		destination->instructionCount = program.instructionCount;
-		destination->registers = program.registers;
-		copyFunction(&destination->instructionCount, &program.instructionCount, sizeof(int));
-		copyFunction(&destination->registers, &program.registers, sizeof(int));
-		copyFunction(&destination->instructions, program.instructions.data(), sizeof(Instruction) * program.instructionCount);				
+	void commitProgram(void * destination, const DistProgram & program, CopyFun copyFunction){
+		DistProgramStatic *dst = reinterpret_cast<DistProgramStatic*>(destination);		
+		copyFunction(&dst->instructionCount, &program.instructionCount, sizeof(int));
+		copyFunction(&dst->registers, &program.registers, sizeof(int));
+		copyFunction(&dst->instructions, program.instructions.data(), sizeof(Instruction) * program.instructionCount);
 	}
 
-	void commitProgramCPU(DistProgramStatic * destination, const DistProgram & program);
+	void commitProgramCPU(void * destination, const DistProgram & program);
 
 #ifdef DISTFUN_ENABLE_CUDA
-	void commitProgramGPU(DistProgramStatic * destination, const DistProgram & program);
+	void commitProgramGPU(void * destination, const DistProgram & program);
 #endif
 
 
@@ -656,13 +655,13 @@ DistProgram compileProgram(const TreeNode & node) {
 	return p;	
 }
 
-void commitProgramCPU(DistProgramStatic * destination, const DistProgram & program) {
+void commitProgramCPU(void * destination, const DistProgram & program) {
 	commitProgram(destination, program, memcpy);
 }
 
 
 #ifdef DISTFUN_ENABLE_CUDA
-void commitProgramGPU(DistProgramStatic * destination, const DistProgram & program) {
+void commitProgramGPU(void * destination, const DistProgram & program) {
 	const auto cpyGlobal = [](void * dest, void * src, size_t size) {
 		cudaMemcpy(dest, src, size, cudaMemcpyKind::cudaMemcpyHostToDevice);
 	};
