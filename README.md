@@ -18,7 +18,10 @@ Inspired by raymarching work by [Inigo Quilez](https://www.iquilezles.org/www/ar
   * Supports evaluation of distance, normal and nearest point at any 3D location
   * Supports raymarching
    
-   
+### Requirements:
+  * [GLM](https://glm.g-truc.net)
+    * For best CUDA compability, use version 9.9.3+
+  
 ### TODO:
   - [ ] Volume calculation by octree subdivision
   - [ ] 3D Grid SDF for custom objects
