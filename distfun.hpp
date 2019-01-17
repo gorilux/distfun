@@ -1,3 +1,26 @@
+/*
+	distfun.hpp - v0.01 - Vojtech Krs 2019
+	Implements signed distance functions of basic primitives
+	Allows conversion a CSG-like tree of primitives to a program 
+	Implements distance program evaluation on CPU and GPU (CUDA)
+
+	INSTALLATION:		
+		Add
+			#define DISTFUN_IMPLEMENTATION
+		before #include
+
+		Add
+			#define DISTFUN_ENABLE_CUDA
+		before #include in .cu/.cuh files
+
+	USAGE:
+		1. Construct a tree out of TreeNode, combining parametrized Primitives
+		2. Call compileProgram on root TreeNode and get DistProgram
+		3. Allocate DistProgram::staticSize() bytes (CPU or GPU)
+		4. call commitProgramCPU/GPU to copy program into a previously allocated byte array
+		5. Use distanceAtPos, distNormal or getNearestPoint to evaluate program at given position		
+
+*/
 #ifndef DISTFUN_HEADER
 #define DISTFUN_HEADER
 
@@ -248,23 +271,31 @@ namespace distfun {
 			itype(type)
 		{}
 		using RegIndex = char;
-
-		/*
-		Instruction types
-
-		regA <- regB op f(obj)
-		regA <- f(obj)
-		regA <- regB op regC
+				
+		/*	
+			Register DEST receives result of op on register reg and Primitive prim.
+			Op is parametrized by _p0
+			DEST <- reg op(_p0) prim			
 		*/
-
 		struct AddrRegObj {
 			RegIndex reg;
 			Primitive prim;
 			float _p0;
 		};
+
+		/*
+			Register DEST receives result of Primitive prim.			
+			DEST <- prim
+		*/
 		struct AddrObj {
 			Primitive prim;
 		};
+
+		/*
+			Register DEST receives result of op on register reg[0] and reg[1].
+			Op is parametrized by _p0
+			DEST <- reg[0] op(_p0) reg[1]
+		*/
 		struct AddrRegReg {
 			RegIndex reg[2];
 			float _p0;
@@ -288,6 +319,10 @@ namespace distfun {
 		int instructionCount;
 		int registers;
 		std::vector<Instruction> instructions;
+
+		size_t staticSize() const {
+			return 2 * sizeof(int) + sizeof(Instruction)*instructions.size();
+		}
 	};
 	
 	struct DistProgramStatic{
@@ -304,7 +339,7 @@ namespace distfun {
 
 
 /*////////////////////////////////////////////////////////////////////////////////////
-Tree To Program conversion
+	Tree To Program conversion
 ////////////////////////////////////////////////////////////////////////////////////*/
 	
 	DistProgram compileProgram(const TreeNode & node);
@@ -344,37 +379,42 @@ Tree To Program conversion
 		for (auto pc = 0; pc < programPtr->instructionCount; pc++) {
 
 			const Instruction & i = programPtr->instructions[pc];
+			float & dest = r[i.regTarget];
 
 			if (i.itype == Instruction::OBJ) {
-				r[i.regTarget] = distPrimitive(pos, i.addr.obj.prim);
+				dest = distPrimitive(pos, i.addr.obj.prim);
 			}
 			else if (i.itype == Instruction::REG_REG) {
-				if (i.optype == Primitive::SD_OP_UNION) {
-					r[i.regTarget] = distUnion(r[i.addr.regreg.reg[0]], r[i.addr.regreg.reg[1]]);
-				}
-				else if (i.optype == Primitive::SD_OP_BLEND) {
-					r[i.regTarget] = distSmoothmin(r[i.addr.regreg.reg[0]], r[i.addr.regreg.reg[1]], i.addr.regreg._p0);
-				}
-				else if (i.optype == Primitive::SD_OP_INTERSECT) {
-					r[i.regTarget] = distIntersection(r[i.addr.regreg.reg[0]], r[i.addr.regreg.reg[1]]);
-				}
-				else if (i.optype == Primitive::SD_OP_DIFFERENCE ) {
-					r[i.regTarget] = distDifference(r[i.addr.regreg.reg[0]], r[i.addr.regreg.reg[1]]);
-				}
+				switch (i.optype) {
+				case Primitive::SD_OP_UNION:
+					dest = distUnion(r[i.addr.regreg.reg[0]], r[i.addr.regreg.reg[1]]);
+					break;
+				case Primitive::SD_OP_BLEND:
+					dest = distSmoothmin(r[i.addr.regreg.reg[0]], r[i.addr.regreg.reg[1]], i.addr.regreg._p0);
+					break;
+				case Primitive::SD_OP_INTERSECT:
+					dest = distIntersection(r[i.addr.regreg.reg[0]], r[i.addr.regreg.reg[1]]);
+					break;
+				case Primitive::SD_OP_DIFFERENCE:
+					dest = distDifference(r[i.addr.regreg.reg[0]], r[i.addr.regreg.reg[1]]);
+					break;				
+				}				
 			}
 			else {
-				if (i.optype == Primitive::SD_OP_UNION) {
-					r[i.regTarget] = distUnion(r[i.addr.regobj.reg], distPrimitive(pos, i.addr.regobj.prim));
-				}
-				else if (i.optype == Primitive::SD_OP_BLEND) {
-					r[i.regTarget] = distSmoothmin(r[i.addr.regobj.reg], distPrimitive(pos, i.addr.regobj.prim), i.addr.regobj._p0);
-				}
-				if (i.optype == Primitive::SD_OP_INTERSECT) {
-					r[i.regTarget] = distIntersection(r[i.addr.regobj.reg], distPrimitive(pos, i.addr.regobj.prim));
-				}
-				if (i.optype == Primitive::SD_OP_DIFFERENCE) {
-					r[i.regTarget] = distIntersection(r[i.addr.regobj.reg], distPrimitive(pos, i.addr.regobj.prim));
-				}
+				switch (i.optype) {
+				case Primitive::SD_OP_UNION:
+					dest = distUnion(r[i.addr.regobj.reg], distPrimitive(pos, i.addr.regobj.prim));
+					break;
+				case Primitive::SD_OP_BLEND:
+					dest = distSmoothmin(r[i.addr.regobj.reg], distPrimitive(pos, i.addr.regobj.prim), i.addr.regobj._p0);
+					break;
+				case Primitive::SD_OP_INTERSECT:
+					dest = distIntersection(r[i.addr.regobj.reg], distPrimitive(pos, i.addr.regobj.prim));
+					break;
+				case Primitive::SD_OP_DIFFERENCE:
+					dest = distDifference(r[i.addr.regobj.reg], distPrimitive(pos, i.addr.regobj.prim));
+					break;
+				}				
 			}
 		}
 
@@ -439,13 +479,11 @@ Tree To Program conversion
 		return mstate;
 
 	}
+	
 
-
-
-
-
-
-
+/*////////////////////////////////////////////////////////////////////////////////////
+	CPU code definition
+////////////////////////////////////////////////////////////////////////////////////*/
 
 
 #ifdef DISTFUN_IMPLEMENTATION
