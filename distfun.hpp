@@ -34,6 +34,7 @@
 #define DISTFUN_ARRAY_PLACEHOLDER 1
 
 #include <glm/glm.hpp>
+#include <glm/gtx/norm.hpp>
 #include <array>
 #include <memory>
 #include <vector>
@@ -58,6 +59,33 @@ namespace distfun {
 	struct Ray {
 		vec3 origin;
 		vec3 dir;
+	};
+
+	struct AABB {
+		vec3 min;
+		vec3 max;
+		vec3 diagonal() const { return max - min; }
+		vec3 center() const { return (min + max) * 0.5f; }
+
+		vec3 sideX() const { return vec3(max.x - min.x, 0, 0); }
+		vec3 sideY() const { return vec3(0, max.y - min.y, 0); }
+		vec3 sideZ() const { return vec3(0, 0, max.z - min.z); }
+
+		AABB getOctant(int octant) const
+		{
+			switch (octant) {
+			case 0: return { min, center() };
+			case 1: return { min + sideX()*0.5f, center() + sideX()*0.5f };
+			case 2: return { min + sideY()*0.5f, center() + sideY()*0.5f };
+			case 3: return { min + sideZ()*0.5f, center() + sideZ()*0.5f };
+			case 4: return { center(), max };
+			case 5: return { center() - sideX()*0.5f, max - sideX()*0.5f };
+			case 6: return { center() - sideY()*0.5f, max - sideY()*0.5f };
+			case 7: return { center() - sideZ()*0.5f, max - sideZ()*0.5f };
+			}
+			return AABB();
+		}
+
 	};
 
 
@@ -427,6 +455,38 @@ namespace distfun {
 		return pos - d*N;
 	}
 		
+
+	
+
+	template <size_t regNum = 4>
+	float volumeInBounds(
+		const AABB & bounds,
+		const DistProgramStatic * programPtr,
+		int curDepth,
+		int maxDepth
+	) {
+		const vec3 pt = bounds.center();
+		const float d = distanceAtPos<regNum>(pt, programPtr);
+
+
+		//If nearest surface is outside of bounds
+		const vec3 diagonal = bounds.diagonal();
+		if (curDepth == maxDepth || d*d >= 0.5f * 0.5f * glm::length2(diagonal)) {
+			//Cell completely outside
+			if (d > 0.0f) return 0.0f;
+						
+			//Cell completely inside, return volume of bounds	
+			return diagonal.x * diagonal.y * diagonal.z; 
+		}
+
+		//Nearest surface is within bounds, subdivide
+		float volume = 0.0f;
+		for (auto i = 0; i < 8; i++) {
+			volume += volumeInBounds(bounds.getOctant(i), programPtr, curDepth + 1, maxDepth);
+		}
+
+		return volume;
+	}
 
 /*////////////////////////////////////////////////////////////////////////////////////
 	Raymarching
