@@ -43,6 +43,7 @@
 #include <unordered_map>
 #include <stack>
 #include <functional>
+#include <cstring>
 #endif
 
 namespace distfun {
@@ -50,6 +51,7 @@ namespace distfun {
 /*////////////////////////////////////////////////////////////////////////////////////
 	Math definitions
 ////////////////////////////////////////////////////////////////////////////////////*/
+	using vec4 = glm::vec4;
 	using vec3 = glm::vec3;
 	using vec2 = glm::vec2;
 	using mat4 = glm::mat4;
@@ -221,7 +223,7 @@ namespace distfun {
 		Func f,
 		Args ... args
 	) {
-		return f(vec3(invTransform * vec4(p, 1.0f)), args ...);
+		return f(vec3(invTransform * vec4(p.x, p.y, p.z, 1.0f)), args ...);
 	}
 
 	__DISTFUN__ vec3 transformPos(
@@ -329,8 +331,7 @@ namespace distfun {
 			float _p0;
 		};
 
-		union Addr {
-			Addr() { memset(this, 0, sizeof(Addr)); }
+		union Addr {			
 			AddrRegObj regobj;
 			AddrObj obj;
 			AddrRegReg regreg;
@@ -716,7 +717,7 @@ DistProgram compileProgram(const TreeNode & node) {
 }
 
 void commitProgramCPU(void * destination, const DistProgram & program) {
-	commitProgram(destination, program, memcpy);
+	commitProgram(destination, program, std::memcpy);
 }
 
 
