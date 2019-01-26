@@ -73,6 +73,20 @@ namespace distfun {
 		vec3 sideY() const { return vec3(0, max.y - min.y, 0); }
 		vec3 sideZ() const { return vec3(0, 0, max.z - min.z); }
 
+		vec3 corner(int index) const {
+			switch (index) {
+			case 0: return min;
+			case 1: return min + sideX();
+			case 2: return min + sideY();
+			case 3: return min + sideZ();
+			case 4: return max;
+			case 5: return max - sideX();
+			case 6: return max - sideY();
+			case 7: return max - sideZ();
+			}
+			return center();
+		}
+
 		AABB getOctant(int octant) const
 		{
 			switch (octant) {
@@ -86,6 +100,21 @@ namespace distfun {
 			case 7: return { center() - sideZ()*0.5f, max - sideZ()*0.5f };
 			}
 			return AABB();
+		}
+
+		AABB getSubGrid(const ivec3 & gridSize, const ivec3 & gridIndex) const {
+			const auto diag = diagonal();
+			const vec3 cellSize = vec3(diag.x / gridSize.x, diag.y / gridSize.y, diag.z / gridSize.z);
+
+			vec3 subgridmin = min + vec3(
+				gridIndex.x * cellSize.x,
+				gridIndex.y * cellSize.y,
+				gridIndex.z * cellSize.z);
+			
+			return { 
+				subgridmin,
+				subgridmin + cellSize
+			};
 		}
 
 	};
@@ -273,6 +302,41 @@ namespace distfun {
 		return FLT_MAX;
 	}
 
+
+	__DISTFUN__ float distPrimitiveDifference(const vec3 & pos, const Primitive & a, const Primitive & b) {
+		return distDifference(distPrimitive(pos, a), distPrimitive(pos, b));
+	}
+	
+	__DISTFUN__ vec3 getNearestPoint(const vec3 & pos, const Primitive & prim, float dx = 0.001f) {
+		float d = distPrimitive(pos, prim);
+		vec3 N = distNormal(pos, dx, distPrimitive, prim);
+		return pos - d*N;
+	}
+
+	__DISTFUN__  AABB primitiveBounds(		
+		const Primitive & prim,
+		float pollDistance,
+		float dx = 0.001f
+	){
+		if (prim.type == Primitive::SD_ELLIPSOID) {
+			vec3 radius = prim.params.ellipsoid.size;
+			mat4 transform = glm::inverse(prim.invTransform);
+			AABB bbOrig = {-radius, radius};
+			AABB bb = { vec3(FLT_MAX), vec3(-FLT_MAX) };
+			for (auto i = 0; i < 8; i++) {
+				vec3 pt = bbOrig.corner(i);
+				pt = vec3(transform * vec4(pt, 1.0f));
+				bb.min = glm::min(pt, bb.min);
+				bb.max = glm::max(pt, bb.max);
+			}
+			return bb;
+		}
+		else {
+			return { vec3(0),vec3(0) };
+		}
+	}
+
+	
 /*////////////////////////////////////////////////////////////////////////////////////
 	Tree  (CPU only)
 ////////////////////////////////////////////////////////////////////////////////////*/
@@ -452,7 +516,7 @@ namespace distfun {
 	template <size_t regNum = 4>
 	__DISTFUN__ vec3 getNearestPoint(const vec3 & pos, const DistProgramStatic * programPtr, float dx = 0.001f) {
 		float d = distanceAtPos<regNum>(pos, programPtr);
-		vec3 N = calcNormal(pos, dx, distanceAtPos<regNum>, programPtr);
+		vec3 N = distNormal(pos, dx, distanceAtPos<regNum>, programPtr);
 		return pos - d*N;
 	}
 		
@@ -488,6 +552,52 @@ namespace distfun {
 
 		return volume;
 	}
+
+
+	
+	__DISTFUN__ vec3 primitiveElasticity(
+		const AABB & bounds,
+		const Primitive & a, 
+		const Primitive & b,
+		float k,
+		int curDepth,
+		int maxDepth
+	){
+		const vec3 pt = bounds.center();
+		const float da = distPrimitive(pt, a);
+		const float db = distPrimitive(pt, b);
+		const float d = distIntersection(db, da);
+
+		//If nearest surface is outside of bounds
+		const vec3 diagonal = bounds.diagonal();
+		if (curDepth == maxDepth || d*d >= 0.5f * 0.5f * glm::length2(diagonal)) {
+			//Cell completely outside
+			if (d > 0.0f) return vec3(0.0f);
+
+			//Cell completely inside			
+
+			//Distance to nearest non-penetrating surface of a
+			const float L = distDifference(da, db);								
+
+			//Normal to nearest non-penetrating surface of a
+			const vec3 N = distNormal(pt, 0.0001f, distPrimitiveDifference, a, b);
+			const vec3 U = 0.5f * k * (L*L) * N;
+			return U;
+		}
+
+		//Nearest surface is within bounds, subdivide
+		vec3 elasticity = vec3(0.0f);
+		float childK = k / 5.0f; 
+		for (auto i = 0; i < 8; i++) {
+			elasticity += primitiveElasticity(bounds.getOctant(i), a, b, childK, curDepth + 1, maxDepth);
+		}
+
+		return elasticity;
+
+
+
+	}
+
 
 /*////////////////////////////////////////////////////////////////////////////////////
 	Raymarching
