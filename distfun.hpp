@@ -318,7 +318,7 @@ namespace distfun {
 		float pollDistance,
 		float dx = 0.001f
 	){
-		if (prim.type == Primitive::SD_ELLIPSOID) {
+		/*if (prim.type == Primitive::SD_ELLIPSOID) {
 			vec3 radius = prim.params.ellipsoid.size;
 			mat4 transform = glm::inverse(prim.invTransform);
 			AABB bbOrig = {-radius, radius};
@@ -333,7 +333,38 @@ namespace distfun {
 		}
 		else {
 			return { vec3(0),vec3(0) };
-		}
+		}*/
+
+		mat4 transform = glm::inverse(prim.invTransform);		
+		vec3 pos = vec3(transform * vec4(vec3(0.0f), 1.0f));
+
+
+		vec3 exPt[6] = {
+			pos + pollDistance * vec3(-1,0,0),
+			pos + pollDistance * vec3(0,-1,0),
+			pos + pollDistance * vec3(0,0,-1),
+			pos + pollDistance * vec3(1,0,0),
+			pos + pollDistance * vec3(0,1,0),
+			pos + pollDistance * vec3(0,0,1)
+		};
+
+		AABB boundingbox;
+
+		boundingbox.min = {
+			getNearestPoint(exPt[0], prim, dx).x,
+			getNearestPoint(exPt[1], prim, dx).y,
+			getNearestPoint(exPt[2], prim, dx).z
+		};
+
+		boundingbox.max = {
+			getNearestPoint(exPt[3], prim, dx).x,
+			getNearestPoint(exPt[4], prim, dx).y,
+			getNearestPoint(exPt[5], prim, dx).z
+		};
+
+
+		return boundingbox;
+
 	}
 
 	
@@ -555,7 +586,7 @@ namespace distfun {
 
 
 	
-	__DISTFUN__ vec3 primitiveElasticity(
+	__DISTFUN__ vec4 primitiveElasticity(
 		const AABB & bounds,
 		const Primitive & a, 
 		const Primitive & b,
@@ -572,7 +603,7 @@ namespace distfun {
 		const vec3 diagonal = bounds.diagonal();
 		if (curDepth == maxDepth || d*d >= 0.5f * 0.5f * glm::length2(diagonal)) {
 			//Cell completely outside
-			if (d > 0.0f) return vec3(0.0f);
+			if (d > 0.0f) return vec4(0.0f);
 
 			//Cell completely inside			
 
@@ -581,12 +612,13 @@ namespace distfun {
 
 			//Normal to nearest non-penetrating surface of a
 			const vec3 N = distNormal(pt, 0.0001f, distPrimitiveDifference, a, b);
-			const vec3 U = 0.5f * k * (L*L) * N;
-			return U;
+			const float magnitude = 0.5f * k * (L*L);
+			const vec3 U = magnitude * N;
+			return vec4(U, magnitude);
 		}
 
 		//Nearest surface is within bounds, subdivide
-		vec3 elasticity = vec3(0.0f);
+		vec4 elasticity = vec4(0.0f);
 		float childK = k / 5.0f; 
 		for (auto i = 0; i < 8; i++) {
 			elasticity += primitiveElasticity(bounds.getOctant(i), a, b, childK, curDepth + 1, maxDepth);
