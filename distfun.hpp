@@ -665,8 +665,7 @@ namespace distfun {
 		float curDist = 0.0f;
 		float px = precision;
 		
-		int depth = 0;
-
+		
 		vec3 curPos = ray.origin;
 
 		while (curDist < maxDist) {			
