@@ -59,8 +59,12 @@ namespace distfun {
 	};
 
 	struct AABB {
-		vec3 min = vec3(std::numeric_limits<float>::max());
-		vec3 max = vec3(std::numeric_limits<float>::lowest());
+		__DISTFUN__ AABB(vec3 minimum = vec3(std::numeric_limits<float>::max()), vec3 maximum = vec3(std::numeric_limits<float>::lowest())) :
+			min(minimum),
+			max(maximum) {
+		}
+		vec3 min;// = vec3(std::numeric_limits<float>::max());
+		vec3 max;// = vec3(std::numeric_limits<float>::lowest());
 		vec3 diagonal() const { return max - min; }
 		vec3 center() const { return (min + max) * 0.5f; }
 
