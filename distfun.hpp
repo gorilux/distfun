@@ -26,7 +26,7 @@
 
 #ifdef DISTFUN_ENABLE_CUDA
 	#include <cuda_runtime.h>
-	#define __DISTFUN__ __host__ __device__
+	#define __DISTFUN__ inline __host__ __device__
 #else
 	#define __DISTFUN__ inline
 #endif
@@ -38,13 +38,8 @@
 #include <array>
 #include <memory>
 #include <vector>
+#include <limits>
 
-#ifdef DISTFUN_IMPLEMENTATION
-#include <unordered_map>
-#include <stack>
-#include <functional>
-#include <cstring>
-#endif
 
 namespace distfun {
 
@@ -64,14 +59,19 @@ namespace distfun {
 	};
 
 	struct AABB {
-		vec3 min;
-		vec3 max;
+		vec3 min = vec3(std::numeric_limits<float>::max());
+		vec3 max = vec3(std::numeric_limits<float>::lowest());
 		vec3 diagonal() const { return max - min; }
 		vec3 center() const { return (min + max) * 0.5f; }
 
 		vec3 sideX() const { return vec3(max.x - min.x, 0, 0); }
 		vec3 sideY() const { return vec3(0, max.y - min.y, 0); }
 		vec3 sideZ() const { return vec3(0, 0, max.z - min.z); }
+
+		float volume() const {
+			const auto diag = diagonal();
+			return diag.x * diag.y * diag.z;
+		}
 
 		vec3 corner(int index) const {
 			switch (index) {
@@ -117,6 +117,13 @@ namespace distfun {
 			};
 		}
 
+		AABB intersect(const AABB & b) const {
+			return { glm::max(min, b.min), glm::min(max, b.max) };
+		}
+
+		bool isValid() const {
+			return min.x < max.x && min.y < max.y && min.z < max.z;
+		}
 	};
 
 
@@ -200,6 +207,9 @@ namespace distfun {
 	{
 		const auto & r = param.size;
 		float k0 = glm::length(vec3(p.x / r.x, p.y / r.y, p.z / r.z));
+		if (k0 == 0.0f)
+			return glm::min(r.x, glm::min(r.y, r.z));
+
 		float k1 = glm::length(vec3(p.x / (r.x*r.x), p.y / (r.y*r.y), p.z / (r.z*r.z)));
 		return k0*(k0 - 1.0f) / k1;
 	}
@@ -555,7 +565,7 @@ namespace distfun {
 	
 
 	template <size_t regNum = 4>
-	float volumeInBounds(
+	__DISTFUN__ float volumeInBounds(
 		const AABB & bounds,
 		const DistProgramStatic * programPtr,
 		int curDepth,
@@ -572,7 +582,7 @@ namespace distfun {
 			if (d > 0.0f) return 0.0f;
 						
 			//Cell completely inside, return volume of bounds	
-			return diagonal.x * diagonal.y * diagonal.z; 
+			return bounds.volume();
 		}
 
 		//Nearest surface is within bounds, subdivide
@@ -681,7 +691,9 @@ namespace distfun {
 		return mstate;
 
 	}
-	
+}
+
+#endif
 
 /*////////////////////////////////////////////////////////////////////////////////////
 	CPU code definition
@@ -689,192 +701,200 @@ namespace distfun {
 
 
 #ifdef DISTFUN_IMPLEMENTATION
-bool isLeaf(const TreeNode & node) {
-	return !node.children[0] && !node.children[1];
-}
 
-int treeDepth(const TreeNode & node) {
-	int depth = 1;
-	if (node.children[0])
-		depth = treeDepth(*node.children[0]);
-	if (node.children[1])
-		depth = glm::max(depth, treeDepth(*node.children[1]));
-	return depth;
-}
+#include <unordered_map>
+#include <stack>
+#include <functional>
+#include <cstring>
+
+
+namespace distfun {
+
+	bool isLeaf(const TreeNode & node) {
+		return !node.children[0] && !node.children[1];
+	}
+
+	int treeDepth(const TreeNode & node) {
+		int depth = 1;
+		if (node.children[0])
+			depth = treeDepth(*node.children[0]);
+		if (node.children[1])
+			depth = glm::max(depth, treeDepth(*node.children[1]));
+		return depth;
+	}
 
 
 
 #define LABEL_LEFT_SIDE 0
 #define LABEL_RIGHT_SIDE 1
-int labelTreeNode(const TreeNode * node, int side, std::unordered_map<const TreeNode*,int> & labels) {
+	int labelTreeNode(const TreeNode * node, int side, std::unordered_map<const TreeNode*, int> & labels) {
 
-	if (!node) return 0;
+		if (!node) return 0;
 
-	if (isLeaf(*node)) {
-		//Left node (0), label 1; Right side (1) -> label 0
-		int newLabel = 1 - side;
-		labels[node] = newLabel;		
-		return newLabel;
-	}
-
-	int labelLeft = labelTreeNode(node->children[0].get(), LABEL_LEFT_SIDE, labels);
-	int labelRight = labelTreeNode(node->children[1].get(), LABEL_RIGHT_SIDE, labels);
-
-	if (labelLeft == labelRight) {
-		labels[node] = labelLeft + 1;		
-	}
-	else {
-		labels[node] = glm::max(labelLeft, labelRight);		
-	}
-	return labels[node];
-}
-
-
-DistProgram compileProgram(const TreeNode & node) {
-
-	//Sethi-Ullman algorithm
-	//https://www.cse.iitk.ac.in/users/karkare/cs335/lectures/19SethiUllman.pdf
-
-		
-	std::vector<Instruction> instructions;
-	std::unordered_map<const TreeNode*, int> labels;
-
-
-	int regs = labelTreeNode(&node, 0, labels);
-	int k = treeDepth(node);
-	int N = k;
-
-	std::stack<Instruction::RegIndex> rstack;
-	std::stack<Instruction::RegIndex> tstack;
-
-	auto swapTop = [](std::stack<Instruction::RegIndex> & stack) {		
-		int top = stack.top();
-		stack.pop();
-		int top2 = stack.top();
-		stack.pop();
-		stack.push(top);
-		stack.push(top2);
-	};
-	
-	for (int i = 0; i < regs; i++) {
-		rstack.push(regs - i - 1);
-		tstack.push(regs - i - 1);
-	}
-
-	std::function<void(const TreeNode * node, int side)> genCode;
-
-	genCode = [&](const TreeNode * node, int side) -> void {
-		assert(node);
-
-		auto & leftChild = node->children[LABEL_LEFT_SIDE];
-		auto & rightChild = node->children[LABEL_RIGHT_SIDE];
-
-
-		if (isLeaf(*node) && side == LABEL_LEFT_SIDE) {
-			Instruction i(Instruction::OBJ);
-			i.optype = node->primitive.type;
-			i.addr.obj.prim = node->primitive;
-			i.regTarget = rstack.top();
-			instructions.push_back(i);
+		if (isLeaf(*node)) {
+			//Left node (0), label 1; Right side (1) -> label 0
+			int newLabel = 1 - side;
+			labels[node] = newLabel;
+			return newLabel;
 		}
-		else if (isLeaf(*rightChild)) {
-			//Generate instructions for left subtree first
-			genCode(node->children[LABEL_LEFT_SIDE].get(), LABEL_LEFT_SIDE);
 
-			Instruction i(Instruction::REG_OBJ);
-			i.optype = node->primitive.type;
+		int labelLeft = labelTreeNode(node->children[0].get(), LABEL_LEFT_SIDE, labels);
+		int labelRight = labelTreeNode(node->children[1].get(), LABEL_RIGHT_SIDE, labels);
 
-			//special case for blend param
-			if (i.optype == Primitive::SD_OP_BLEND) {
-				i.addr.regobj._p0 = node->primitive.params.blend.k;
+		if (labelLeft == labelRight) {
+			labels[node] = labelLeft + 1;
+		}
+		else {
+			labels[node] = glm::max(labelLeft, labelRight);
+		}
+		return labels[node];
+	}
+
+
+	DistProgram compileProgram(const TreeNode & node) {
+
+		//Sethi-Ullman algorithm
+		//https://www.cse.iitk.ac.in/users/karkare/cs335/lectures/19SethiUllman.pdf
+
+
+		std::vector<Instruction> instructions;
+		std::unordered_map<const TreeNode*, int> labels;
+
+
+		int regs = labelTreeNode(&node, 0, labels);
+		int k = treeDepth(node);
+		int N = k;
+
+		std::stack<Instruction::RegIndex> rstack;
+		std::stack<Instruction::RegIndex> tstack;
+
+		auto swapTop = [](std::stack<Instruction::RegIndex> & stack) {
+			int top = stack.top();
+			stack.pop();
+			int top2 = stack.top();
+			stack.pop();
+			stack.push(top);
+			stack.push(top2);
+		};
+
+		for (int i = 0; i < regs; i++) {
+			rstack.push(regs - i - 1);
+			tstack.push(regs - i - 1);
+		}
+
+		std::function<void(const TreeNode * node, int side)> genCode;
+
+		genCode = [&](const TreeNode * node, int side) -> void {
+			assert(node);
+
+			auto & leftChild = node->children[LABEL_LEFT_SIDE];
+			auto & rightChild = node->children[LABEL_RIGHT_SIDE];
+
+
+			if (isLeaf(*node) && side == LABEL_LEFT_SIDE) {
+				Instruction i(Instruction::OBJ);
+				i.optype = node->primitive.type;
+				i.addr.obj.prim = node->primitive;
+				i.regTarget = rstack.top();
+				instructions.push_back(i);
+			}
+			else if (isLeaf(*rightChild)) {
+				//Generate instructions for left subtree first
+				genCode(node->children[LABEL_LEFT_SIDE].get(), LABEL_LEFT_SIDE);
+
+				Instruction i(Instruction::REG_OBJ);
+				i.optype = node->primitive.type;
+
+				//special case for blend param
+				if (i.optype == Primitive::SD_OP_BLEND) {
+					i.addr.regobj._p0 = node->primitive.params.blend.k;
+				}
+
+				i.addr.regobj.reg = rstack.top();
+				i.addr.regobj.prim = node->children[LABEL_RIGHT_SIDE]->primitive;
+				i.regTarget = rstack.top();
+				instructions.push_back(i);
+			}
+			//Case 3. left child requires less than N registers
+			else if (labels[leftChild.get()] < N) {
+				// Right child goes into next to top register
+				swapTop(rstack);
+				//Evaluate right child
+				genCode(node->children[LABEL_RIGHT_SIDE].get(), LABEL_RIGHT_SIDE);
+
+				Instruction::RegIndex R = rstack.top();
+				rstack.pop();
+
+				//Evaluate left child
+				genCode(node->children[LABEL_LEFT_SIDE].get(), LABEL_LEFT_SIDE);
+
+				Instruction i(Instruction::REG_REG);
+				i.optype = node->primitive.type;
+				i.addr.regreg.reg[0] = rstack.top();
+				i.addr.regreg.reg[1] = R;
+
+				//special case for blend param
+				if (i.optype == Primitive::SD_OP_BLEND) {
+					i.addr.regreg._p0 = node->primitive.params.blend.k;
+				}
+
+				i.regTarget = rstack.top();
+				instructions.push_back(i);
+
+				rstack.push(R);
+				swapTop(rstack);
+			}
+			else if (labels[rightChild.get()] <= N) {
+				//Evaluate right child
+				genCode(node->children[LABEL_LEFT_SIDE].get(), LABEL_LEFT_SIDE);
+
+				Instruction::RegIndex R = rstack.top();
+				rstack.pop();
+
+				//Evaluate left child
+				genCode(node->children[LABEL_RIGHT_SIDE].get(), LABEL_RIGHT_SIDE);
+
+				Instruction i(Instruction::REG_REG);
+				i.optype = node->primitive.type;
+				i.addr.regreg.reg[0] = R;
+				i.addr.regreg.reg[1] = rstack.top();
+				i.regTarget = R;
+				instructions.push_back(i);
+			}
+			//Shouldn't happen, uses temporary stack (in gmem)
+			else {
+
 			}
 
-			i.addr.regobj.reg = rstack.top();
-			i.addr.regobj.prim = node->children[LABEL_RIGHT_SIDE]->primitive;
-			i.regTarget = rstack.top();
-			instructions.push_back(i);
-		}
-		//Case 3. left child requires less than N registers
-		else if (labels[leftChild.get()] < N) {
-			// Right child goes into next to top register
-			swapTop(rstack);
-			//Evaluate right child
-			genCode(node->children[LABEL_RIGHT_SIDE].get(), LABEL_RIGHT_SIDE);
-
-			Instruction::RegIndex R = rstack.top();
-			rstack.pop();
-
-			//Evaluate left child
-			genCode(node->children[LABEL_LEFT_SIDE].get(), LABEL_LEFT_SIDE);
-
-			Instruction i(Instruction::REG_REG);
-			i.optype = node->primitive.type;
-			i.addr.regreg.reg[0] = rstack.top();
-			i.addr.regreg.reg[1] = R;
-
-			//special case for blend param
-			if (i.optype == Primitive::SD_OP_BLEND) {
-				i.addr.regreg._p0 = node->primitive.params.blend.k;
-			}
-
-			i.regTarget = rstack.top();
-			instructions.push_back(i);
-
-			rstack.push(R);
-			swapTop(rstack);
-		}
-		else if (labels[rightChild.get()] <= N) {
-			//Evaluate right child
-			genCode(node->children[LABEL_LEFT_SIDE].get(), LABEL_LEFT_SIDE);
-
-			Instruction::RegIndex R = rstack.top();
-			rstack.pop();
-
-			//Evaluate left child
-			genCode(node->children[LABEL_RIGHT_SIDE].get(), LABEL_RIGHT_SIDE);
-
-			Instruction i(Instruction::REG_REG);
-			i.optype = node->primitive.type;
-			i.addr.regreg.reg[0] = R;
-			i.addr.regreg.reg[1] = rstack.top();
-			i.regTarget = R;
-			instructions.push_back(i);
-		}
-		//Shouldn't happen, uses temporary stack (in gmem)
-		else {	
-
-		}
-
-	};
+		};
 
 
-	genCode(&node, 0);
+		genCode(&node, 0);
 
-	DistProgram p;
-	p.instructions = std::move(instructions);
-	p.registers = regs;
-	p.instructionCount = p.instructions.size();
+		DistProgram p;
+		p.instructions = std::move(instructions);
+		p.registers = regs;
+		p.instructionCount = p.instructions.size();
 
-	return p;	
-}
+		return p;
+	}
 
-void commitProgramCPU(void * destination, const DistProgram & program) {
-	commitProgram(destination, program, std::memcpy);
-}
+	void commitProgramCPU(void * destination, const DistProgram & program) {
+		commitProgram(destination, program, std::memcpy);
+	}
 
 
 #ifdef DISTFUN_ENABLE_CUDA
-void commitProgramGPU(void * destination, const DistProgram & program) {
-	const auto cpyGlobal = [](void * dest, void * src, size_t size) {
-		cudaMemcpy(dest, src, size, cudaMemcpyKind::cudaMemcpyHostToDevice);
-	};
-	commitProgram(destination, program, cpyGlobal);
-}
+	void commitProgramGPU(void * destination, const DistProgram & program) {
+		const auto cpyGlobal = [](void * dest, const void * src, size_t size) {
+			cudaMemcpy(dest, src, size, cudaMemcpyKind::cudaMemcpyHostToDevice);
+		};
+		commitProgram(destination, program, cpyGlobal);
+	}
 #endif
 
-#endif
+
 
 }
-
 
 #endif
