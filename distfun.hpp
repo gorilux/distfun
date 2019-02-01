@@ -592,7 +592,40 @@ namespace distfun {
 		//Nearest surface is within bounds, subdivide
 		float volume = 0.0f;
 		for (auto i = 0; i < 8; i++) {
-			volume += volumeInBounds(bounds.getOctant(i), programPtr, curDepth + 1, maxDepth);
+			volume += volumeInBounds<regNum>(bounds.getOctant(i), programPtr, curDepth + 1, maxDepth);
+		}
+
+		return volume;
+	}
+
+	
+	__DISTFUN__ float intersectionVolume(
+		const AABB & bounds,
+		const Primitive & a,
+		const Primitive & b,
+		int curDepth,
+		int maxDepth
+	) {
+		const vec3 pt = bounds.center();
+		const float da = distPrimitive(pt, a);
+		const float db = distPrimitive(pt, b);
+		const float d = distIntersection(da, db);
+
+
+		//If nearest surface is outside of bounds
+		const vec3 diagonal = bounds.diagonal();
+		if (curDepth == maxDepth || d*d >= 0.5f * 0.5f * glm::length2(diagonal)) {
+			//Cell completely outside
+			if (d > 0.0f) return 0.0f;
+
+			//Cell completely inside, return volume of bounds	
+			return bounds.volume();
+		}
+
+		//Nearest surface is within bounds, subdivide
+		float volume = 0.0f;
+		for (auto i = 0; i < 8; i++) {
+			volume += intersectionVolume(bounds.getOctant(i), a,b, curDepth + 1, maxDepth);
 		}
 
 		return volume;
