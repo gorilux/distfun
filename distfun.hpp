@@ -282,12 +282,22 @@ namespace distfun {
 	}
 
 	template <class Func, class ... Args>
-	__DISTFUN__ vec3 distNormal(vec3 pos, float eps, Func f, Args ... args)
+	__DISTFUN__ vec3 distGradient(vec3 pos, float eps, Func f, Args ... args)
 	{
-		return normalize(vec3(
+		return vec3(
 			f(pos + vec3(eps, 0, 0), args ...) - f(pos - vec3(eps, 0, 0), args ...),
 			f(pos + vec3(0, eps, 0), args ...) - f(pos - vec3(0, eps, 0), args ...),
-			f(pos + vec3(0, 0, eps), args ...) - f(pos - vec3(0, 0, eps), args ...)));
+			f(pos + vec3(0, 0, eps), args ...) - f(pos - vec3(0, 0, eps), args ...));
+
+	}
+
+	template <class Func, class ... Args>
+	__DISTFUN__ vec3 distNormal(vec3 pos, float eps, Func f, Args ... args)
+	{
+		return normalize(distGradient(pos, eps, f, args...));/*  vec3(
+			f(pos + vec3(eps, 0, 0), args ...) - f(pos - vec3(eps, 0, 0), args ...),
+			f(pos + vec3(0, eps, 0), args ...) - f(pos - vec3(0, eps, 0), args ...),
+			f(pos + vec3(0, 0, eps), args ...) - f(pos - vec3(0, 0, eps), args ...)));*/
 
 	}
 	
@@ -797,9 +807,8 @@ namespace distfun {
 		std::unordered_map<const TreeNode*, int> labels;
 
 
-		int regs = labelTreeNode(&node, 0, labels);
-		int k = treeDepth(node);
-		int N = k;
+		int regs = labelTreeNode(&node, 0, labels);		
+		int N = regs;
 
 		std::stack<Instruction::RegIndex> rstack;
 		std::stack<Instruction::RegIndex> tstack;
@@ -852,7 +861,8 @@ namespace distfun {
 				instructions.push_back(i);
 			}
 			//Case 3. left child requires less than N registers
-			else if (labels[leftChild.get()] < N) {
+			//else if (labels[leftChild.get()] < N) {
+			else if (labels[leftChild.get()] < labels[rightChild.get()] && labels[leftChild.get()] < N) {
 				// Right child goes into next to top register
 				swapTop(rstack);
 				//Evaluate right child
@@ -880,14 +890,16 @@ namespace distfun {
 				rstack.push(R);
 				swapTop(rstack);
 			}
-			else if (labels[rightChild.get()] <= N) {
-				//Evaluate right child
+			//else if (labels[rightChild.get()] < N) {
+			//Case 4
+			else if (labels[rightChild.get()] <= labels[leftChild.get()] && labels[rightChild.get()] < N) {
+				//Evaluate left child
 				genCode(node->children[LABEL_LEFT_SIDE].get(), LABEL_LEFT_SIDE);
 
 				Instruction::RegIndex R = rstack.top();
 				rstack.pop();
 
-				//Evaluate left child
+				//Evaluate right child
 				genCode(node->children[LABEL_RIGHT_SIDE].get(), LABEL_RIGHT_SIDE);
 
 				Instruction i(Instruction::REG_REG);
@@ -896,10 +908,12 @@ namespace distfun {
 				i.addr.regreg.reg[1] = rstack.top();
 				i.regTarget = R;
 				instructions.push_back(i);
+
+				rstack.push(R);
 			}
 			//Shouldn't happen, uses temporary stack (in gmem)
 			else {
-
+				
 			}
 
 		};
